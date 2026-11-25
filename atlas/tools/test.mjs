@@ -79,6 +79,21 @@ for (const m of man) {
 }
 ok(!read('kit/stage.js').includes('</script') && !read('kit/sound.js').includes('</script'), 'kits: no literal </script>');
 
+// ---- art styles (atlas/art): manifest, and the files that exist
+const artList = load('art/manifest.js', sandbox()).ART_LIST;
+ok(artList.length === 100 && new Set(artList.map(a => a.id)).size === 100, 'art manifest: 100 unique ids', artList.length);
+let artBuilt = 0;
+for (const m of artList) {
+  if (!fs.existsSync(path.join(ROOT, 'art', m.id + '.js'))) continue;
+  artBuilt++;
+  const src = read('art/' + m.id + '.js');
+  ok(!/Math\.random|Date\.|setTimeout|setInterval/.test(src), `art ${m.id}: no Math.random, Date or timers`);
+  ok(!src.includes('</script') && !/^\s*(import|export)\b/m.test(src), `art ${m.id}: classic script`);
+  const a = load('art/' + m.id + '.js', sandbox()).ARTS?.[m.id];
+  ok(a && a.id === m.id && a.name === m.name && a.group === m.group && a.inputs === m.inputs, `art ${m.id}: id, name, group, inputs agree with the manifest`);
+  ok(a && a.post && typeof a.post.fragment === 'string' && a.post.fragment.includes('postFX'), `art ${m.id}: post.fragment defines postFX`);
+}
+
 // ---- buildPrompt
 const style = load('styles/' + man.find(m => built.includes(m.id)).file, sandbox()).STYLES[built[0]];
 const sources = { stage: read('kit/stage.js'), sound: read('kit/sound.js'), style: read('styles/' + style.id + '.js') };
@@ -98,6 +113,7 @@ for (const id of built) {
 ok(maxLen < 120000, 'largest prompt below 120,000 characters', maxLen);
 
 console.log(`\n${pass} passed, ${fail} failed`);
+console.log(`art style files built: ${artBuilt} of ${artList.length}`);
 console.log(`style files built: ${built.length} of ${man.length} (${built.join(', ')})`);
 console.log(`largest prompt: ${maxLen} characters (${maxId}), about ${Math.round(maxLen / 4)} tokens`);
 console.log(`kit lines: stage.js ${read('kit/stage.js').split('\n').length}, sound.js ${read('kit/sound.js').split('\n').length}`);

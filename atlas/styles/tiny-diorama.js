@@ -133,7 +133,7 @@ STYLES['tiny-diorama'] = {
       cam(t);
       const s = vanS(t), p = route.getPointAt(Math.min(1, s / RL)), q0 = route.getPointAt(Math.max(0, (s - 0.08) / RL)), q = p.clone().add(p.clone().sub(q0));
       van.position.copy(p); van.position.y = 0.28 + (legs.some(([a, b]) => t > a && t < b) ? 0.02 * Math.abs(Math.sin(realT * 18)) : 0);
-      if (q.distanceTo(p) > 1e-4) van.rotation.y = -Math.atan2(q.z - p.z, q.x - p.x);
+      const tg = route.getTangentAt(Math.min(1, s / RL)); van.rotation.y = -Math.atan2(tg.z, tg.x); // set every call, so seek order does not matter
       // the letter: in the hand, into the box, into the van, into the office, out to the door
       const toBox = K.prog(t, 0.5, 1.2, 'inOut'), toVan = K.prog(t, B[1] + 1.2, B[1] + 1.7, 'inOut'), toOffice = K.prog(t, B[2] + 1.35, B[2] + 1.8, 'inOut');
       const sorted = K.prog(t, B[2] + 1.9, B[2] + 2.3), back = K.prog(t, B[3] - 0.2, B[3] + 0.0), toDoor = K.prog(t, B[3] + 1.55, B[3] + 2.0, 'inOut');

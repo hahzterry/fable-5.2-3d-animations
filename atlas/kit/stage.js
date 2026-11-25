@@ -132,6 +132,7 @@ K.label = (text, opts = {}) => {
     : new T.MeshBasicMaterial({ map: tex, transparent: true, toneMapped: false, depthWrite: false });
   const mesh = new T.Mesh(new T.PlaneGeometry(w * k, h * k), mat);
   mesh.userData.w = w * k; mesh.userData.h = h * k;
+  mesh.userData.isLabel = true; // an art style draws labels in a separate pass, after its post shader
   return mesh;
 };
 
@@ -247,12 +248,22 @@ K.lights = (S, preset = 'studio', opts = {}) => {
   return out;
 };
 
+// Change a material in place (art styles, hook M): fn(shader) edits the compiled shader; earlier onBeforeCompile hooks still run.
+K.patchMaterial = (m, fn) => {
+  const prev = m.onBeforeCompile;
+  const key = (m.customProgramCacheKey ? m.customProgramCacheKey() : prev ? prev.toString() : '') + fn.toString(); // programs are cached by this key
+  m.onBeforeCompile = (shader, r) => { if (prev) prev.call(m, shader, r); fn(shader, m); };
+  m.customProgramCacheKey = () => key;
+  m.needsUpdate = true;
+};
+
 // ---------- run ----------
 const VERT = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
 const tri = T => { const g = new T.BufferGeometry(); g.setAttribute('position', new T.Float32BufferAttribute([-1, -1, 0, 3, -1, 0, -1, 3, 0], 3)); g.setAttribute('uv', new T.Float32BufferAttribute([0, 0, 2, 0, 0, 2], 2)); return g; };
 
 K.run = async (canvas, style, opts = {}) => {
-  const T = window.THREE;
+  const T = window.THREE, art = opts.art || null; // art: an art style from atlas/art/<id>.js, drawn over a scene whose post is null
+  if (art && style.post) throw new Error(`Art style "${art.id}" needs a scene with post: null. "${style.id}" has its own post shader.`);
   await K.loadFonts(style.fonts || []);
   const W = 1920, H = 1080, scale = opts.scale || 1;
   const renderer = new T.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
@@ -272,6 +283,10 @@ K.run = async (canvas, style, opts = {}) => {
     own: x => (owned.push(x), x),
   };
   const update = style.build(S);
+  if (art && art.material) { // M: the art style changes materials in place, once each; label meshes are never offered
+    const seen = new Set();
+    scene.traverse(o => { if (o.isMesh && !o.userData.isLabel) for (const m of [].concat(o.material)) if (m && !seen.has(m)) { seen.add(m); art.material(m, o, S); } });
+  }
   let warp;
   S.setCues = cues => { warp = K.makeWarp(S.beats.map(b => b.t), style.duration, cues); S.duration = warp.duration; S.cues = cues || null; };
   S.toReal = c => warp.toReal(c);
@@ -279,8 +294,8 @@ K.run = async (canvas, style, opts = {}) => {
   S.setCues(opts.cues);
 
   // Render path: direct to screen, or through targets for the post pass and for sub-frame samples.
-  const post = style.post, sz = [W * scale, H * scale];
-  let rtScene, rtAcc, rtNorm, quad, quadScene, ortho, copyMat, finalMat, normMat;
+  const post = art ? art.post : style.post, sz = [W * scale, H * scale], xs = art && art.x; // xs = {n, still?, span, mode: 'avg'|'max'|'diff'|'echo'}
+  let rtScene, rtAcc, rtLive, depthMat, echoMat, rtNorm, quad, quadScene, ortho, copyMat, finalMat, normMat;
   const ensureTargets = () => {
     if (rtScene) return;
     rtScene = S.own(new T.WebGLRenderTarget(...sz, { type: T.HalfFloatType, samples: 4, depthTexture: new T.DepthTexture(...sz) }));
@@ -293,11 +308,28 @@ K.run = async (canvas, style, opts = {}) => {
     copyMat = S.own(new T.ShaderMaterial({ vertexShader: VERT, transparent: true, blending: T.AdditiveBlending, depthTest: false, depthWrite: false, toneMapped: false,
       uniforms: { tex: { value: null }, w: { value: 1 } },
       fragmentShader: 'uniform sampler2D tex; uniform float w; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(tex, vUv).rgb, w); }' }));
+    if (xs && xs.mode === 'echo') { // earlier renders, kept only where they are nearer than the live render: tColor = (sum of their colours, count)
+      rtLive = S.own(new T.WebGLRenderTarget(...sz, { type: T.HalfFloatType }));
+      const lin = 'float z = texture2D(tD, vUv).x * 2.0 - 1.0, d = 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear));';
+      const mk = (frag, uni, extra) => S.own(new T.ShaderMaterial(Object.assign({ vertexShader: VERT, depthTest: false, depthWrite: false, toneMapped: false, fragmentShader: 'uniform sampler2D tD, tex, tL; uniform float uNear, uFar; varying vec2 vUv; void main(){ ' + lin + frag + ' }',
+        uniforms: Object.assign({ tD: { value: null }, tex: { value: null }, tL: { value: null }, uNear: { value: 0.1 }, uFar: { value: 500 } }, uni) }, extra)));
+      depthMat = mk('gl_FragColor = vec4(d, 0.0, 0.0, 1.0);', {}, {});
+      echoMat = mk('gl_FragColor = vec4(texture2D(tex, vUv).rgb, step(d, texture2D(tL, vUv).x * 0.993));', {}, { transparent: true, blending: T.AdditiveBlending });
+    }
+    if (xs && xs.mode === 'max') Object.assign(copyMat, { blending: T.CustomBlending, blendEquation: T.MaxEquation, blendSrc: T.OneFactor, blendDst: T.OneFactor });
+    // Extra inputs for art styles only: W world position, B beat times and canonical time, tPrev for X 'diff', uFocus = distance to the look target.
+    const artHead = art ? 'uniform sampler2D tPrev, tCur; uniform float uXn; uniform mat4 uProjInv, uViewInv; uniform float uCanon, uFocus, uDur, uRealT, uBeats[8]; uniform int uBeatN;\n' +
+      'vec3 worldPos(vec2 uv){ vec4 c = uProjInv * vec4(uv * 2.0 - 1.0, texture2D(tDepth, uv).x * 2.0 - 1.0, 1.0); return (uViewInv * vec4(c.xyz / c.w, 1.0)).xyz; }\n' +
+      'vec3 worldNormal(vec2 uv){ return normalize(mat3(uViewInv) * (texture2D(tNormal, uv).rgb * 2.0 - 1.0)); }\n' +
+      'float beatIdx(){ float k = -1.0; for (int i = 0; i < 8; i++) if (i < uBeatN && uCanon >= uBeats[i]) k = float(i); return k; }\n' +
+      'float beatAge(){ float k = beatIdx(); return k < 0.0 ? uCanon : uCanon - uBeats[int(k)]; }\n' : '';
     const head = 'uniform sampler2D tColor, tDepth, tNormal; uniform vec2 uRes; uniform float uTime, uNear, uFar; varying vec2 vUv;\n' +
-      'float linDepth(vec2 uv){ float z = texture2D(tDepth, uv).x * 2.0 - 1.0; return 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }\n';
+      'float linDepth(vec2 uv){ float z = texture2D(tDepth, uv).x * 2.0 - 1.0; return 2.0 * uNear * uFar / (uFar + uNear - z * (uFar - uNear)); }\n' + artHead;
     finalMat = S.own(new T.ShaderMaterial({ vertexShader: VERT, depthTest: false, depthWrite: false,
       uniforms: Object.assign({ tColor: { value: null }, tDepth: { value: null }, tNormal: { value: null }, uRes: { value: new T.Vector2(...sz) },
-        uTime: { value: 0 }, uNear: { value: 0.1 }, uFar: { value: 500 } }, post ? post.uniforms || {} : {}),
+        uTime: { value: 0 }, uNear: { value: 0.1 }, uFar: { value: 500 } },
+        art ? { tPrev: { value: null }, tCur: { value: null }, uXn: { value: 1 }, uProjInv: { value: new T.Matrix4() }, uViewInv: { value: new T.Matrix4() }, uCanon: { value: 0 }, uFocus: { value: 1 }, uDur: { value: 1 }, uRealT: { value: 0 },
+          uBeats: { value: S.beats.map(b => b.t).concat(Array(8).fill(1e9)).slice(0, 8) }, uBeatN: { value: Math.min(8, S.beats.length) } } : {}, post ? post.uniforms || {} : {}),
       // post.fragment defines vec4 postFX(vec2 uv) and returns linear colour; tone mapping and sRGB happen once, here.
       fragmentShader: head + (post ? post.fragment : 'vec4 postFX(vec2 uv){ return texture2D(tColor, uv); }') +
         '\nvoid main(){ gl_FragColor = postFX(vUv);\n#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}' }));
@@ -313,19 +345,63 @@ K.run = async (canvas, style, opts = {}) => {
     camera.position.addScaledVector(right, Math.cos(a) * r).addScaledVector(up, Math.sin(a) * r);
     camera.lookAt(focus);
   };
-  const apply = (real) => { update(warp.toCanonical(real), real); };
+  // art.labels = 'halo' | 'light' | 'dark': an outline around the glyphs, in the opposite tone of the text ('halo') or a fixed tone. Default: none.
+  const haloLabel = o => {
+    const m = o.material, dark = art.labels === 'dark' ? 1 : art.labels === 'light' ? 0 : -1;
+    o.userData.halo = true; m.transparent = true; m.alphaTest = 0;
+    K.patchMaterial(m, sh => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <opaque_fragment>', `
+        vec2 hpx = 4.0 / vec2(textureSize(map, 0)); float hA = 0.0; vec3 hC = vec3(0.0);
+        for (int i = 0; i < 12; i++) { float ha = float(i) * 0.5236; vec4 hT = texture2D(map, vMapUv + vec2(cos(ha), sin(ha)) * hpx); if (hT.a > hA) { hA = hT.a; hC = hT.rgb; } }
+        float hDark = ${dark < 0 ? 'step(0.5, dot(hC, vec3(0.333)))' : dark.toFixed(1)};
+        outgoingLight = mix(vec3(mix(0.96, 0.03, hDark)), outgoingLight, diffuseColor.a);
+        diffuseColor.a = max(diffuseColor.a, hA * 0.92);
+        #include <opaque_fragment>`);
+    });
+  };
+  const apply = (real) => {
+    update(warp.toCanonical(real), real);
+    if (art) scene.traverse(o => { // labels live on layer 1: drawn only by the label pass
+      if (o.userData.isLabel) { o.layers.set(1); if (art.labels && !o.userData.halo) haloLabel(o); } else if (o.isLight) o.layers.enable(1);
+    });
+  };
+  // Labels: drawn after the post shader, on top of the art, without occlusion. Shadow maps from the main pass stay valid for lit labels.
+  const labelPass = () => {
+    const { background, fog } = scene, ac = renderer.autoClear, su = renderer.shadowMap.autoUpdate;
+    scene.background = null; scene.fog = null; camera.layers.set(1); renderer.autoClear = false; renderer.shadowMap.autoUpdate = false;
+    renderer.setRenderTarget(null); renderer.clearDepth(); renderer.render(scene, camera);
+    scene.background = background; scene.fog = fog; camera.layers.set(0); renderer.autoClear = ac; renderer.shadowMap.autoUpdate = su;
+  };
   S.seek = t => {
     S.t = t;
-    const n = S.samples;
-    if (n <= 1 && !post) { apply(t); renderer.setRenderTarget(null); renderer.render(scene, camera); return; }
+    const tf = art && art.fps ? Math.floor(t * art.fps + 1e-4) / art.fps : t; // S: frame step
+    const mode = xs ? xs.mode || 'avg' : 'avg';
+    const n = xs ? (mode === 'diff' ? 2 : S.samples > 1 ? xs.still || xs.n : xs.n) : S.samples;
+    if (n <= 1 && !post && !art) { apply(t); renderer.setRenderTarget(null); renderer.render(scene, camera); return; }
     ensureTargets();
     const shutter = 0.5 / 30;
-    for (let i = 0; i < Math.max(1, n); i++) {
-      apply(t + (n > 1 ? (i / n) * shutter : 0));
-      if (n > 1) jitterDof(i);
+    // sub-frame times: X = n times in the window [tf - span, tf], and the last one is tf, so depth, normals and camera belong to the frame itself
+    const timeAt = i => xs ? Math.max(0, tf - (mode === 'diff' ? (1 - i) * xs.span : xs.span * (n - 1 - i) / n)) : tf + (n > 1 ? (i / n) * shutter : 0);
+    let pose = null; // X with fixCamera: the camera keeps its pose at tf in every render (a tripod)
+    if (xs && xs.fixCamera) { apply(tf); pose = [camera.position.clone(), camera.quaternion.clone(), camera.fov]; }
+    // echo: the live render first (its depth is kept), then the earlier ones, then the live render again so depth, normals and tCur are the live frame
+    const seq = mode === 'echo' ? [n - 1, ...Array.from({ length: n - 1 }, (_, i) => i), n - 1] : Array.from({ length: Math.max(1, n) }, (_, i) => i);
+    const pass = (mat, tgt) => { quad.material = mat; renderer.setRenderTarget(tgt); const ac = renderer.autoClear; renderer.autoClear = tgt === rtLive; renderer.render(quadScene, ortho); renderer.autoClear = ac; };
+    for (let q = 0; q < seq.length; q++) {
+      const i = seq[q];
+      apply(timeAt(i));
+      if (pose) { camera.position.copy(pose[0]); camera.quaternion.copy(pose[1]); if (camera.fov !== pose[2]) { camera.fov = pose[2]; camera.updateProjectionMatrix(); } }
+      if (n > 1 && !xs) jitterDof(i);
       renderer.setRenderTarget(rtScene); renderer.render(scene, camera);
-      if (n > 1) {
-        copyMat.uniforms.tex.value = rtScene.texture; copyMat.uniforms.w.value = 1 / n;
+      if (mode === 'echo' && q < seq.length - 1) {
+        for (const m of [depthMat, echoMat]) { m.uniforms.tD.value = rtScene.depthTexture; m.uniforms.tex.value = rtScene.texture; m.uniforms.tL.value = rtLive.texture; m.uniforms.uNear.value = camera.near; m.uniforms.uFar.value = camera.far; }
+        if (q === 0) {
+          pass(depthMat, rtLive);
+          const cc = renderer.getClearColor(new T.Color()), ca = renderer.getClearAlpha();
+          renderer.setRenderTarget(rtAcc); renderer.setClearColor(0x000000, 0); renderer.clear(); renderer.setClearColor(cc, ca);
+        } else pass(echoMat, rtAcc);
+      } else if (mode !== 'echo' && n > 1 && (mode !== 'diff' || i === 0)) {
+        copyMat.uniforms.tex.value = rtScene.texture; copyMat.uniforms.w.value = mode === 'avg' ? 1 / n : 1;
         quad.material = copyMat; renderer.setRenderTarget(rtAcc);
         if (i === 0) { // the scene background sets the clear colour; the sum must start from black
           const cc = renderer.getClearColor(new T.Color()), ca = renderer.getClearAlpha();
@@ -336,9 +412,15 @@ K.run = async (canvas, style, opts = {}) => {
     }
     if (rtNorm) { scene.overrideMaterial = normMat; renderer.setRenderTarget(rtNorm); renderer.render(scene, camera); scene.overrideMaterial = null; }
     const u = finalMat.uniforms;
-    u.tColor.value = n > 1 ? rtAcc.texture : rtScene.texture; u.tDepth.value = rtScene.depthTexture;
-    u.tNormal.value = rtNorm ? rtNorm.texture : null; u.uTime.value = t; u.uNear.value = camera.near; u.uFar.value = camera.far;
+    u.tColor.value = n > 1 && mode !== 'diff' ? rtAcc.texture : rtScene.texture; u.tDepth.value = rtScene.depthTexture;
+    u.tNormal.value = rtNorm ? rtNorm.texture : null; u.uTime.value = tf; u.uNear.value = camera.near; u.uFar.value = camera.far;
+    if (art) {
+      const look = camera.userData.look || new T.Vector3();
+      u.tCur.value = rtScene.texture; u.uXn.value = n; u.tPrev.value = mode === 'diff' ? rtAcc.texture : null; u.uCanon.value = warp.toCanonical(tf); u.uDur.value = S.duration; u.uRealT.value = t; u.uFocus.value = camera.position.distanceTo(look);
+      u.uProjInv.value.copy(camera.projectionMatrixInverse); u.uViewInv.value.copy(camera.matrixWorld);
+    }
     quad.material = finalMat; renderer.setRenderTarget(null); renderer.render(quadScene, ortho);
+    if (art) labelPass();
   };
   S.dispose = () => {
     const texs = new Set();

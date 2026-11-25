@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "aphoristic-cadence",
+        "value": "*",
+        "files": [
+          "art-styles-plan.html"
+        ],
+        "createdAt": "2026-11-14T04:22:59.742Z",
+        "reason": "agent decision: owner's global CLAUDE.md requires ASD-STE100 short sentences; the short-sentence pattern is the mandated style, not a slogan"
+      }
+    ]
+  }
+}

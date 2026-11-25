@@ -2,6 +2,10 @@
 
 **Play with it live: <https://az9713.github.io/fable-5.2-3d-animations/atlas/>**
 
+**The 100 art styles: <https://az9713.github.io/fable-5.2-3d-animations/atlas/art.html>**
+
+**The formula of each art style: <https://az9713.github.io/fable-5.2-3d-animations/art-styles-math.html>**
+
 A library of 100 animation styles in 13 families, built only in code with three.js: no models, no images, no texture files. Each card plays a short sample with sound. Type your topic, click **Copy prompt**, and paste the prompt into Claude. The prompt gives Claude the style source, the rendering kit and the sound kit, so that Claude can rebuild the style for your subject.
 
 [![The gallery](atlas/posters/soft-clay.jpg)](https://az9713.github.io/fable-5.2-3d-animations/atlas/)
@@ -37,9 +41,11 @@ See [`atlas/README.md`](atlas/README.md) for the player controls (SRT timing, Re
 | Path | What it is |
 | --- | --- |
 | `atlas/index.html` | The gallery and the prompt builder. |
+| `atlas/art.html` | The gallery of the 100 art styles (post shaders over a scene) and their prompt builder. |
 | `atlas/player.html` | Plays one style; SRT timing, WebM, WAV. |
 | `atlas/kit/` | Rendering kit (`stage.js`), sound kit (`sound.js`), prompt builder (`prompt.js`). |
 | `atlas/styles/` | One file per style, plus `manifest.js`. |
 | `atlas/posters/` | One still per card. |
+| `atlas/art/`, `atlas/art-posters/` | One file per art style plus `manifest.js`; one still per art-style card. |
 | `atlas/tools/test.mjs` | Automated checks (Node, no dependencies). |
 | `HANDOFF.md` | The design spec and the build log. |

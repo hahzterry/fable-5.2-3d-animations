@@ -21,13 +21,16 @@ function parseSRT(text) {
   return cues;
 }
 
-// style: the style object. opts: {topic, voiceover, srt, storyboard}. sources: {stage, sound, style} file texts.
+// style: the style object. opts: {topic, voiceover, srt, storyboard, art}. sources: {stage, sound, style, art} file texts.
+// opts.art (an ARTS entry from atlas/art/<id>.js, plus look) makes an art-style prompt: the scene style is the carrier, the art style is the look.
 function buildPrompt(style, opts, sources) {
-  const o = opts || {}, vo = !!o.voiceover;
+  const o = opts || {}, vo = !!o.voiceover, art = o.art || null;
   const ver = (String(sources.stage).match(/THREE_VERSION\s*=\s*'([^']+)'/) || [])[1] || '0.187.0';
   const fonts = (style.fonts || []).length ? style.fonts.join(', ') + ' (Google Fonts, one <link> tag)' : 'none';
   const P = [];
-  P.push(`I want a short 3D motion graphic made with three.js in the "${style.name}" style. Below is the full source of a reference animation in this style, and the small rendering kit and sound kit that it runs on. Use them as the style guide. Rebuild the animation for my content.`);
+  P.push(art
+    ? `I want a short 3D motion graphic made with three.js and drawn in the "${art.name}" art style. Look: ${art.look} Below is the full source of the art style (a post shader that redraws every frame), a reference animation that it was shown on ("${style.name}"), and the small rendering kit and sound kit that they run on. Build a new animation for my content and draw it with this art style.`
+    : `I want a short 3D motion graphic made with three.js in the "${style.name}" style. Below is the full source of a reference animation in this style, and the small rendering kit and sound kit that it runs on. Use them as the style guide. Rebuild the animation for my content.`);
   P.push(`MY CONTENT\n${(o.topic || '').trim() || '[Type your topic here]'}`);
   if (vo) P.push(`MY VOICEOVER TIMING\n${(o.srt || '').trim() || 'Ask me for the SRT or word timestamps before you build.'}`);
   P.push(`WHAT TO BUILD
@@ -35,7 +38,7 @@ One self-contained HTML file (an artifact if possible):
 - three.js ${ver}, core only, as an ES module from a CDN: https://cdn.jsdelivr.net/npm/three@${ver}/build/three.module.js (an import map or a dynamic import). Set window.THREE = THREE before the kit and the style code run.
 - A 1920x1080 canvas scaled to the window. A control bar: play/pause, scrub slider, time, sound toggle, loop (on by default).${vo ? ' Add "Load voiceover" (an audio file; the audio element is the clock, and each frame reads audio.currentTime).' : ''}
 - A new style object made the same way as the reference: content block first, then build(S) that returns update(t, realT). 7 to 12 seconds unless the content needs more.${vo ? '\n- The duration is the last cue end plus 1 second. One beat starts on each cue start. Give the cues to K.run as { cues } (each {start, end, text} in seconds); the kit then warps the canonical time to the voice.' : ''}
-- Run it with const S = await K.run(canvas, style, { samples }). 1 sample for live play, the style's count for frame renders. Expose window.seek = t => S.seek(t) and window.DURATION = S.duration.
+${art ? `- Load the ART STYLE file below unchanged as a classic script. It registers ARTS['${art.id}']. The new style object must have post: null. Text that must stay legible must be made with K.label (the kit draws labels over the art style).\n` : ''}- Run it with const S = await K.run(canvas, style, { samples${art ? `, art: ARTS['${art.id}']` : ''} }). 1 sample for live play, the style's count for frame renders. Expose window.seek = t => S.seek(t) and window.DURATION = S.duration.
 - Play style.sound through SOUND.live(k => style.sound(k), t, { map: S.toReal${vo ? ', voiceover: true' : ''} }) in sync with the player. Stop it on pause, on seek and when the sound toggle is off. Create the AudioContext only in the Play click.
 - Include the STAGE kit and the SOUND kit below, unchanged.
 - Load these Google Fonts before you build: ${fonts}. K.run loads the fonts in style.fonts for you.`);
@@ -48,6 +51,9 @@ One self-contained HTML file (an artifact if possible):
 - Everything is built in code. No models, images, HDRIs or texture files.
 - Simple forms with good light are better than complex forms that look wrong. Check each fact and number.
 - The video is often seen on a phone. Text is large and stays long enough to read. The subject fills most of the frame through the full camera move. Frame 0 is a good picture. The last second holds.`);
+  if (art) P.push(`ART STYLE (the look comes from here)
+- The reference animation is only a carrier. Keep its kit usage and its manner of motion; take the look from the art style.
+- Simple forms, clear depth and strong value contrast give the art style the most to work with.${/B/.test(art.inputs) ? '\n- This art style changes at each beat. Put the beats where the picture should change.' : ''}`);
   P.push(`FLOW BETWEEN BEATS
 - A new beat is not automatically a new scene. If the next idea continues the last one, stay in the same world and move the camera to where it happens.
 - For a real change of place or time, change the scene in the manner of this look (a page turn, a set turn, an object that wipes the frame, a change of light). No hard cuts.
@@ -74,6 +80,7 @@ Good for: ${style.goodFor}`);
   P.push(`STAGE KIT (kit/stage.js)\n\`\`\`js\n${sources.stage}\n\`\`\``);
   P.push(`SOUND KIT (kit/sound.js)\n\`\`\`js\n${sources.sound}\n\`\`\``);
   P.push(`REFERENCE STYLE (${style.id}.js)\n\`\`\`js\n${sources.style}\n\`\`\``);
+  if (art) P.push(`ART STYLE (art/${art.id}.js)\n\`\`\`js\n${sources.art}\n\`\`\``);
   return P.join('\n\n');
 }
 

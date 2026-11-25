@@ -73,9 +73,16 @@ const entry = STYLE_LIST.find(s => s.id === id);
 if (!entry) throw msg('Unknown style: ' + id, true);
 try { await load('styles/' + entry.file); } catch (e) { msg(`Style "${entry.name}" is not built yet.`, true); throw e; }
 const style = STYLES[id];
-document.title = still ? 'loading' : `${String(entry.n).padStart(2, '0')} ${style.name} — Player`;
+// Art style: ?art=<id> draws the scene with atlas/art/<id>.js (the scene must have post: null).
+let art = null;
+if (q.get('art')) {
+  try { await load('art/manifest.js'); const ae = ART_LIST.find(a => a.id === q.get('art')); if (!ae) throw new Error('Unknown art style: ' + q.get('art')); await load('art/' + ae.id + '.js'); art = ARTS[ae.id]; }
+  catch (e) { throw msg(e.message, true); }
+}
+document.title = still ? 'loading' : `${String(entry.n).padStart(2, '0')} ${style.name}${art ? ' + ' + art.name : ''} — Player`;
 const samples = +(q.get('samples') || (still ? style.samples : 1));
-const S = await K.run($('c'), style, { samples });
+let S;
+try { S = await K.run($('c'), style, { samples, art }); } catch (e) { throw msg(e.message, true); }
 window.S = S;
 window.seek = t => S.seek(t);
 Object.defineProperty(window, 'DURATION', { get: () => duration() });

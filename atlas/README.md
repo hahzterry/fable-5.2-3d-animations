@@ -26,6 +26,8 @@ The pages need an internet connection: three.js comes from jsDelivr and the font
 5. Optional: tick **Storyboard first**. Claude then renders one still per beat and waits for your OK before it builds.
 6. Click **Copy prompt** and paste the prompt into Claude. **Open in player** opens the style in `player.html`.
 
+`art.html` (link at the top of `index.html`) is the same kind of gallery for the 100 art styles. An art style is a post shader that redraws a scene. Each card shows it on Tiny Diorama; the window can switch to Floating Screens. Its prompt adds the art-style source to the scene source and the kits.
+
 ### The player
 
 `player.html?style=<id>` plays one style.
@@ -78,4 +80,7 @@ Then open `player.html?style=<new-id>` and look at `t = 0`, the middle and the e
 | `styles/manifest.js` | One row per style: id, name, family, look, demo topic. |
 | `styles/<id>.js` | One style each. |
 | `posters/<id>.jpg` | A still for each card. |
+| `art.html` | The art-style gallery and prompt builder. |
+| `art/manifest.js`, `art/<id>.js` | One row and one file per art style. |
+| `art-posters/<id>.jpg` | A still for each art-style card (Tiny Diorama, t = 5 s, 8 samples, 640x360). |
 | `tools/test.mjs` | Automated checks (Node, no dependencies). |
